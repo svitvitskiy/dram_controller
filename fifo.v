@@ -5,59 +5,52 @@ input                     write_en;
 input  [WIDTH-1:0]        write_data;
 input                     read_en;
 output [WIDTH-1:0]        read_data;
-output                    empty;
-output                    full;
+output reg                empty;
+output reg                full;
 
 parameter SIZE = 4;
 parameter WIDTH = 8;
 
-reg       [WIDTH-1:0]   storage_r [SIZE-1:0];
-reg  [$clog2(SIZE)-1:0] read_ptr_r;
-reg  [$clog2(SIZE)-1:0] write_ptr_r;
-reg                     reading_r;
-reg                     full_r;
-reg                     empty_r;
-reg       [WIDTH-1:0]   data_r;
-reg                     rst_empty_r;
+reg         [WIDTH-1:0] r_storage [SIZE-1:0];
+reg  [$clog2(SIZE)-1:0] r_read_ptr;
+reg  [$clog2(SIZE)-1:0] r_write_ptr;
+reg                     r_rst_empty;
 
-assign empty        = empty_r;
-assign full         = full_r;
+assign read_data    = r_storage[r_read_ptr];
 
-assign read_data    = storage_r[read_ptr_r];
-
-wire  [$clog2(SIZE)-1:0] read_ptr_n  = read_ptr_r + 1;
-wire  [$clog2(SIZE)-1:0] write_ptr_n = write_ptr_r + 1;
+wire  [$clog2(SIZE)-1:0] w_read_ptr_nxt  = r_read_ptr + 1;
+wire  [$clog2(SIZE)-1:0] w_write_ptr_nxt = r_write_ptr + 1;
 
 always @ (posedge clk or posedge rst) begin
   if (rst) begin
-    read_ptr_r               <= 0;
-	 write_ptr_r              <= 0;
-	 full_r                   <= 0;
-	 empty_r                  <= 1;
-	 rst_empty_r              <= 0;
+    r_read_ptr               <= 0;
+	 r_write_ptr              <= 0;
+	 full                     <= 0;
+	 empty                    <= 1;
+	 r_rst_empty              <= 0;
   end
   else begin
-    if (rst_empty_r) begin
-	   empty_r                <= 0;
-		rst_empty_r            <= 0;
+    if (r_rst_empty) begin
+	   empty                  <= 0;
+		r_rst_empty            <= 0;
 	 end
 	 if (write_en && read_en) begin
-	   storage_r[write_ptr_r] <= write_data;
-		write_ptr_r            <= write_ptr_r + 1;
-		read_ptr_r             <= read_ptr_r + 1;
-	 end else if (write_en && !full_r) begin
-	   storage_r[write_ptr_r] <= write_data;
-		rst_empty_r            <= 1;
-		if (write_ptr_n == read_ptr_r) begin
-		  full_r               <= 1;
+	   r_storage[r_write_ptr] <= write_data;
+		r_write_ptr            <= r_write_ptr + 1;
+		r_read_ptr             <= r_read_ptr + 1;
+	 end else if (write_en && !full) begin
+	   r_storage[r_write_ptr] <= write_data;
+		r_rst_empty            <= 1;
+		if (w_write_ptr_nxt == r_read_ptr) begin
+		  full                 <= 1;
 		end
-		write_ptr_r            <= write_ptr_r + 1;
-	 end else if (read_en && !empty_r) begin
-		full_r                 <= 0;
-		if (read_ptr_n == write_ptr_r) begin
-		  empty_r              <= 1;
+		r_write_ptr            <= r_write_ptr + 1;
+	 end else if (read_en && !empty) begin
+		full                   <= 0;
+		if (w_read_ptr_nxt == r_write_ptr) begin
+		  empty                <= 1;
 		end
-		read_ptr_r             <= read_ptr_r + 1;
+		r_read_ptr             <= r_read_ptr + 1;
 	 end
   end
 end

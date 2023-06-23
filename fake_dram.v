@@ -1,4 +1,9 @@
-module fake_dram(
+module fake_dram #(
+  parameter LOG_DRAM_SIZE = 6,
+  parameter PAGE_LEN = 32,
+  parameter LOG_ADDR_SIZE = LOG_DRAM_SIZE - $clog2(PAGE_LEN),
+  parameter LOG_REQ_SIZE = 1 + LOG_ADDR_SIZE
+)(
   input                     clk,
   input                     rst,
   // DRAM
@@ -30,12 +35,11 @@ module fake_dram(
   output reg                error
 );
 
-
-parameter LOG_DRAM_SIZE = 6;
-parameter PAGE_LEN = 32;
-parameter LOG_ADDR_SIZE = LOG_DRAM_SIZE - $clog2(PAGE_LEN);
-parameter LOG_REQ_SIZE = 1 + LOG_ADDR_SIZE;
-
+localparam
+  READ_REQ = 0,
+  CMD_SEL = 1,
+  READ_DATA = 2,
+  WRITE_DATA = 3;
 
 reg [1:0] r_state;
 reg [LOG_REQ_SIZE-1:0] r_req;
@@ -53,25 +57,25 @@ begin
   end
   else begin
 	  case(r_state)
-		 default: begin
+		 READ_REQ: begin
 			fout_write_en <= 0;
 			fin_read_en   <= 0;
-			r_state       <= !frq_empty ? 1 : 0;
+			r_state       <= !frq_empty ? CMD_SEL : READ_REQ;
 			r_req         <= frq_read_data;
 			frq_read_en   <= !frq_empty;
 		 end		 
-		 1: begin
+		 CMD_SEL: begin
 			frq_read_en   <= 0;
-			r_state       <= r_req[0] ? 3 : (!fout_full ? 2 : 1);
+			r_state       <= r_req[0] ? WRITE_DATA : (!fout_full ? READ_DATA : CMD_SEL);
 		 end		 
-		 2: begin
+		 READ_DATA: begin
 			fout_write_en   <= 1;
 			// the data is the address
 			fout_write_data <= r_req[LOG_REQ_SIZE-1:1];
-			r_state         <= 0;
+			r_state         <= READ_REQ;
 		 end
-		 3: begin
-			r_state       <= !fin_empty ? 0 : 3;
+		 WRITE_DATA: begin
+			r_state       <= !fin_empty ? READ_REQ : WRITE_DATA;
 			error         <= error | (r_req[LOG_REQ_SIZE-1:1] != fin_read_data);
 			fin_read_en   <= !fin_empty;
 		 end
