@@ -1,6 +1,7 @@
 module dram_tester(
   input             CLOCK_50,
   output     [6:0]  HEX1, 
+  output      [7:0] LEDG,
   output     [17:0] LEDR,
   input       [3:0] KEY,
   output reg [12:0] DRAM_ADDR,
@@ -24,7 +25,7 @@ localparam
 
 wire clk_50;
 wire clk_100;
-wire clk_200;
+wire clk_400;
 wire pll_lock;
 wire rst = ~KEY[0];
 
@@ -46,33 +47,41 @@ reg [13:0] r_timer;
 reg [3:0]  r_counter;
 reg [12:0] r_row;
 reg        r_done;
-reg        r_error;
+//reg [17:0] r_error;
 reg  [1:0] r_ba;
 reg  [9:0] r_to_read;
+reg [31:0] r_dram_data;
+reg [31:0] r_dram_dq;
+reg [17:0] r_err_cnt;
+reg [10:0] r_data_pos;
+reg        r_kick_off;
+reg        r_kickoff_write;
 
-assign LEDR = {14'h0000, r_done, r_error, pll_lock, r_init_done};
+assign LEDG = {4'h0000, r_done, r_err_cnt != 0, pll_lock, r_init_done};
+assign LEDR = r_err_cnt;
 
 // Always write 'DEAD' to dram
-assign DRAM_DQ = r_writing ? "DEAD" : 32'hzzzz;
-wire w_error = DRAM_DQ != "DEAD";
+assign DRAM_DQ = r_writing ? r_dram_data : 32'hzzzz;
 	
 always @ (posedge DRAM_CLK or posedge rst) begin
   if (rst) begin
     r_state           <= 0;
 	 r_timer           <= 0;
 	 r_init_done       <= 0;
-	 r_writing         <= 0;
 	 r_row             <= 0;
 	 r_done            <= 0;
-	 r_error           <= 0;
 	 r_ba              <= 0;
 	 r_to_read         <= 0;
+	 r_kick_off        <= 0;
+	 r_kickoff_write   <= 0;
 	 // NOP
 	 DRAM_CS_N         <= 0;
 	 DRAM_RAS_N        <= 1;
 	 DRAM_CAS_N        <= 1;
 	 DRAM_WE_N         <= 1;
 	 DRAM_CKE          <= 1;
+	 // All 4 bytes enabled
+	 DRAM_DQM          <= 4'b0000;
   end
   else if (r_timer) begin
     r_timer           <= r_timer - 1;
@@ -96,7 +105,7 @@ always @ (posedge DRAM_CLK or posedge rst) begin
         DRAM_CAS_N    <= 1;
         DRAM_WE_N     <= 0;
 		  DRAM_ADDR[10] <= 1;
-		  r_timer       <= T_RP - 1;
+		  r_timer       <= T_RP;
 		  r_state       <= 2;
 		  // 8 autorefresh commands
 		  r_counter     <= 7;
@@ -107,7 +116,7 @@ always @ (posedge DRAM_CLK or posedge rst) begin
         DRAM_RAS_N    <= 0;
         DRAM_CAS_N    <= 0;
         DRAM_WE_N     <= 1;
-		  r_timer       <= T_RC - 1;
+		  r_timer       <= T_RC;
 		  r_state       <= r_counter == 0 ? 3 : 2;
 		  r_counter     <= r_counter == 0 ? 0 : r_counter - 1;
 		end
@@ -126,9 +135,8 @@ always @ (posedge DRAM_CLK or posedge rst) begin
 		  DRAM_ADDR[6:4] <= 3'b010; // cas=2
 		  DRAM_ADDR[8:7] <= 0;      // normal operation
 		  DRAM_ADDR[9]   <= 0;      // burst mode
-		  
 		  r_state        <= 4;
-		  r_timer        <= T_CAS - 1; // wait 2 clk, send NOP
+		  r_timer        <= T_CAS; // wait 2 clk, send NOP
 		end
 		4: begin
 		  r_init_done    <= 1;
@@ -142,10 +150,12 @@ always @ (posedge DRAM_CLK or posedge rst) begin
         DRAM_WE_N      <= 1;
 		  DRAM_ADDR      <= r_row;
 		  DRAM_BA        <= r_ba;
-		  r_timer        <= T_RCD - 1;
+		  r_timer        <= T_RCD;
 		  r_state        <= 6;
+		  r_kickoff_write<= 1;
 		end
 		6: begin
+		  r_kickoff_write <= 0;
 		  // write
 		  DRAM_CS_N      <= 0;
         DRAM_RAS_N     <= 1;
@@ -155,45 +165,105 @@ always @ (posedge DRAM_CLK or posedge rst) begin
 		  DRAM_ADDR[10]  <= 0; // no precharge, read folllows
 		  DRAM_BA        <= r_ba;
 		  r_state        <= 7;
-		  r_writing      <= 1;
 		  // Will send 2 << 10 words to DRAM, including this one
-		  r_timer        <= 10'b1111111111;
+		  r_to_read      <= 10'h3fe;
 		end
 		7: begin
-		  // read
-		  r_writing      <= 0;
-		  r_state        <= 8;
-		  DRAM_CS_N      <= 0;
-        DRAM_RAS_N     <= 1;
-        DRAM_CAS_N     <= 0;
-        DRAM_WE_N      <= 1;
-		  DRAM_ADDR[9:0] <= 0; // Whole page
-		  DRAM_ADDR[10]  <= 0; // precharge after read
-		  DRAM_BA        <= r_ba;
-		  // Will send 2 << 10 words to DRAM, including this one
-		  r_timer        <= T_CAS - 1; // cas
-		  r_to_read      <= 10'h3ff;
-		end
-		8: begin
-		  // NOP while reading
+			// NOP while writing
 		  DRAM_CS_N         <= 0;
 		  DRAM_RAS_N        <= 1;
         DRAM_CAS_N        <= 1;
         DRAM_WE_N         <= 1;
-		  r_error           <= r_error | w_error;
-		  r_state           <= r_to_read == 0 ? (w_error ? 10 : 9) : 8;
+		  r_state           <= r_to_read == 0 ? 8 : 7;
 		  r_to_read         <= r_to_read == 0 ? 0 : r_to_read - 1;
 		end
+		8: begin
+		  // read
+		  r_state        <= 9;
+		  // read
+		  DRAM_CS_N      <= 0;
+        DRAM_RAS_N     <= 1;
+        DRAM_CAS_N     <= 0;
+        DRAM_WE_N      <= 1;
+		  
+		  DRAM_ADDR[9:0] <= 0; // Whole page
+		  DRAM_ADDR[10]  <= 0; // don't precharge
+		  DRAM_BA        <= r_ba;
+		  // Will send 2 << 10 words to DRAM, including this one
+		  r_timer        <= 0;
+		  r_to_read      <= 10'h3ff;
+		  r_kick_off     <= 1;
+		end
 		9: begin
-		  r_ba              <= r_ba + 1;
-		  r_row             <= (r_ba == 3) ? (r_row == LAST_ROW ? 0 : r_row + 1) : r_row;
-		  r_state           <= (r_ba == 3) && (r_row == LAST_ROW) ? 10 : 5;
+		  r_kick_off     <= 0;
+		  if (r_to_read == 0) begin
+           // Precharge current bank
+			  DRAM_CS_N         <= 0;
+			  DRAM_RAS_N        <= 0;
+			  DRAM_CAS_N        <= 1;
+			  DRAM_WE_N         <= 0;
+			  DRAM_ADDR[10]     <= 0; // only current bank
+			  // wait for the remaining data to come in
+			  r_timer           <= T_CAS;
+		  end 
+		  else begin
+		     // NOP, continue read
+			  DRAM_CS_N         <= 0;
+			  DRAM_RAS_N        <= 1;
+			  DRAM_CAS_N        <= 1;
+			  DRAM_WE_N         <= 1;
+		  end
+		  r_state              <= r_to_read == 0 ? 10 : 9;
+		  r_to_read            <= r_to_read == 0 ? 0 : r_to_read - 1;
+		end
+		10: begin
+		  r_ba                 <= r_ba + 1;
+		  r_row                <= (r_ba == 3) ? (r_row == LAST_ROW ? 0 : r_row + 1) : r_row;
+		  r_state              <= (r_ba == 3) && (r_row == LAST_ROW) ? 11 : 5;
 		end
 		default: begin
 		  // final state, we are done
 		  r_done            <= 1;
 		end
 	 endcase
+  end
+end
+
+reg [10:0] r_tmp;
+
+always @ (posedge DRAM_CLK or posedge rst) begin
+  if (rst) begin
+    r_writing      <= 0;
+    r_dram_data    <= 10'h3ff;
+  end
+  else if (r_kickoff_write) begin
+    r_writing      <= 1;
+    r_dram_data    <= 0;
+  end
+  else if (r_dram_data != 10'h3ff) begin
+    r_dram_data    <= r_dram_data + 1;
+  end
+  else begin
+    r_writing      <= 0;
+  end
+end
+
+always @ (posedge DRAM_CLK or posedge rst) begin
+  r_tmp = r_data_pos - 2;
+  if (rst) begin
+    r_data_pos     <= 11'h402;
+	 r_dram_dq      <= 0;
+	 r_err_cnt      <= 0;
+  end
+  else begin
+	  if (r_kick_off) begin
+		 r_data_pos  <= 0;
+	  end
+	  if (r_data_pos != 11'h402) begin  
+		 r_dram_dq   <= DRAM_DQ;
+		 r_data_pos  <= r_data_pos + 1;
+		 r_err_cnt   <= r_err_cnt + (r_data_pos >= 2 && r_dram_dq != r_tmp);
+	  end
   end
 end
 
