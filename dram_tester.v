@@ -21,7 +21,7 @@ localparam
   T_RC = 7,
   T_RCD = 2,
   T_CAS = 2,
-  LAST_ROW = 0; // for now
+  LAST_ROW = 4095; // for now
 
 wire clk_50;
 wire clk_100;
@@ -60,7 +60,6 @@ reg        r_kickoff_write;
 assign LEDG = {4'h0000, r_done, r_err_cnt != 0, pll_lock, r_init_done};
 assign LEDR = r_err_cnt;
 
-// Always write 'DEAD' to dram
 assign DRAM_DQ = r_writing ? r_dram_data : 32'hzzzz;
 	
 always @ (posedge DRAM_CLK or posedge rst) begin
@@ -229,25 +228,24 @@ always @ (posedge DRAM_CLK or posedge rst) begin
   end
 end
 
-reg [10:0] r_tmp;
-
 always @ (posedge DRAM_CLK or posedge rst) begin
   if (rst) begin
     r_writing      <= 0;
-    r_dram_data    <= 10'h3ff;
+    r_dram_data    <= {r_row, 10'h3ff};
   end
   else if (r_kickoff_write) begin
     r_writing      <= 1;
-    r_dram_data    <= 0;
+    r_dram_data    <= {r_row, 10'h000};
   end
-  else if (r_dram_data != 10'h3ff) begin
-    r_dram_data    <= r_dram_data + 1;
+  else if (r_dram_data[9:0] != 10'h3ff) begin
+    r_dram_data[9:0]<= r_dram_data[9:0] + 1;
   end
   else begin
     r_writing      <= 0;
   end
 end
 
+reg [10:0] r_tmp;
 always @ (posedge DRAM_CLK or posedge rst) begin
   r_tmp = r_data_pos - 2;
   if (rst) begin
@@ -262,7 +260,7 @@ always @ (posedge DRAM_CLK or posedge rst) begin
 	  if (r_data_pos != 11'h402) begin  
 		 r_dram_dq   <= DRAM_DQ;
 		 r_data_pos  <= r_data_pos + 1;
-		 r_err_cnt   <= r_err_cnt + (r_data_pos >= 2 && r_dram_dq != r_tmp);
+		 r_err_cnt   <= r_err_cnt + (r_data_pos >= 2 && (r_dram_dq[9:0] != r_tmp || r_dram_dq[22:10] != r_row));
 	  end
   end
 end
